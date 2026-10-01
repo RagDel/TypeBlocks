@@ -1,0 +1,8 @@
+# This repository publishes only the explicitly listed showcase files.
+/*
+!/.gitignore
+!/README.md
+!/assets/
+/assets/*
+!/assets/text-view.png
+!/assets/event-table.png
