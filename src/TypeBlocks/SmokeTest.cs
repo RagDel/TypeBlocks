@@ -8,6 +8,7 @@ namespace TypeBlocks;
 // never enables recording or changes the owner's vault, settings, or startup entry.
 internal static class SmokeTest
 {
+    private static Action<string>? _trace;
     public static int Run(string outputDirectory)
     {
         Directory.CreateDirectory(outputDirectory);
@@ -15,12 +16,20 @@ internal static class SmokeTest
         File.WriteAllText(progressFile, "Starting synthetic smoke test\n");
         File.WriteAllText(Path.Combine(outputDirectory, "result.txt"), "INCOMPLETE: smoke test started but has not finished.");
         void Progress(string message) => File.AppendAllText(progressFile, message + "\n");
+        _trace = Progress;
         string temporaryVault = Path.Combine(Path.GetTempPath(), "TypeBlocks-smoke-" + Guid.NewGuid().ToString("N"));
         const string password = "Synthetic test passphrase 42!";
         int result = 1;
         using var dispatcher = new Control();
         _ = dispatcher.Handle;
         using var context = new ApplicationContext();
+        ThreadExceptionEventHandler reportUiFailure = (_, eventArgs) =>
+        {
+            File.WriteAllText(Path.Combine(outputDirectory, "result.txt"), eventArgs.Exception.ToString());
+            Progress("Failed in a Windows UI callback");
+            context.ExitThread();
+        };
+        Application.ThreadException += reportUiFailure;
         dispatcher.BeginInvoke(async () =>
         {
             try
@@ -36,17 +45,22 @@ internal static class SmokeTest
                 if (KeyboardRecorder.FormatKey(Keys.Return, isExtended: true) != "Num Enter") throw new Exception("Keypad formatting failed.");
                 Progress("Verifying global shortcut registration, settings and nonactivating status popup");
                 await HotkeySmokeTests.Verify(outputDirectory);
+                Progress("Verifying dropdown keyboard selection and multiline editor scrolling");
+                ModernControlSmokeTests.Verify(PrepareForm);
                 Progress("Rendering setup");
-                using (var setup = new SetupForm()) Render(setup, Path.Combine(outputDirectory, "setup.png"));
+                AppIconSmokeTests.Verify(outputDirectory);
+                Progress("Icon verification completed");
+                using (var setup = new SetupForm()) { Progress("Setup constructed"); Render(setup, Path.Combine(outputDirectory, "setup.png")); }
                 Progress("Rendering unlock");
-                using (var unlock = new PasswordForm()) Render(unlock, Path.Combine(outputDirectory, "unlock.png"));
+                using (var unlock = new PasswordForm(recoverPassword: _ => { })) Render(unlock, Path.Combine(outputDirectory, "unlock.png"));
                 Progress("Rendering settings");
-                using (var settings = new SettingsForm(new AppSettings())) Render(settings, Path.Combine(outputDirectory, "settings.png"));
-                using (var settings = new SettingsForm(new AppSettings()))
+                using (var settings = new SettingsForm(new AppSettings(), vaultDirectory: temporaryVault)) Render(settings, Path.Combine(outputDirectory, "settings.png"));
+                using (var settings = new SettingsForm(new AppSettings(), vaultDirectory: temporaryVault))
                 {
                     PrepareForm(settings);
                     settings.FitToWorkingArea(new Size(600, 560));
                     var save = settings.Controls.OfType<Button>().Single(button => button.Text == "Save settings");
+                    settings.ActiveControl = save;
                     settings.ScrollControlIntoView(save);
                     if (!settings.ClientRectangle.Contains(save.Bounds)) throw new Exception("Settings save button is inaccessible in a small working area.");
                     Render(settings, Path.Combine(outputDirectory, "settings-small.png"));
@@ -54,11 +68,14 @@ internal static class SmokeTest
                 Progress("Rendering history");
                 var clock = new UnlockTestClock();
                 var session = new HistoryUnlockSession(clock);
+                Progress("Verifying synthetic modal unlock");
                 session.Unlock(VerifySuccessfulUnlock(password, temporaryVault));
                 using (var history = new HistoryForm(session, temporaryVault))
                 {
+                    Progress("Preparing synthetic history viewer");
                     PrepareForm(history);
                     await history.PreparePreviewForTest();
+                    Progress("Verifying text modes and toolbar layout");
                     await history.VerifyTextViewForTest();
                     Render(history, Path.Combine(outputDirectory, "history.png"));
                     var originalSize = history.Size;
@@ -67,12 +84,24 @@ internal static class SmokeTest
                     history.Size = originalSize;
                     history.SelectTableForPreview();
                     Render(history, Path.Combine(outputDirectory, "history-table.png"));
+                    Ui.SetTheme(AppTheme.Dark);
+                    Render(history, Path.Combine(outputDirectory, "history-table-dark.png"));
+                    history.SelectTextForPreview();
+                    Render(history, Path.Combine(outputDirectory, "history-dark.png"));
+                    history.SelectAllKeysForPreview();
+                    Render(history, Path.Combine(outputDirectory, "history-all-keys-dark.png"));
+                    Ui.SetTheme(AppTheme.Light);
+                    Render(history, Path.Combine(outputDirectory, "history-all-keys.png"));
                     history.Close();
                 }
-                Progress("Verifying one-hour unlock lifecycle and canceled authentication");
+                Progress("Verifying default one-hour unlock lifecycle and canceled authentication");
                 await VerifyUnlockLifecycle(session, clock, password, temporaryVault);
                 await VerifyCanceledUnlock();
-                File.WriteAllText(Path.Combine(outputDirectory, "result.txt"), "PASS: Raw Input register/dispose while paused; legacy data migration and collision safety; shortcut formatting; global shortcut registration, conflict/save-failure rollback, rebind/disposal release and synthetic message dispatch; shortcut settings compatibility; On/Off popup rendering, no-activation styles and timer refresh/dismissal; synthetic encrypted history load; pure text replay, search, layout and table sorting; shared one-hour unlock across viewer reopen, expiry closes and clears an open viewer, explicit lock, stale decryption rejection and canceled authentication; all four UI forms rendered, including history at minimum size. No real input recorded, no physical shortcut injection, no startup changes.");
+                Progress("Verifying in-app settings navigation, theme preview and lock lifecycle");
+                await VerifySettingsNavigation(password, temporaryVault, dispatcher.Handle);
+                Progress("Verifying recovery dialogs and both themes with temporary credentials");
+                await VerifyRecoveryUi(temporaryVault, password, outputDirectory);
+                File.WriteAllText(Path.Combine(outputDirectory, "result.txt"), "PASS: paused Raw Input registration; legacy migration; global shortcut conflicts, rollback, rebinding and synthetic dispatch; resume queue boundaries; theme/settings persistence; nonactivating On/Off popup; embedded icon sizes/transparency; dropdown keyboard selection, cancellation and item clearing; multiline edit notifications, scroll bounds and editor focus; segmented views and text modes, search and sorting; configurable lock settings, default one-hour unlock and cancellation; in-app settings navigation, theme preview, cancel and lock lifecycle; staged recovery generation, confirmation and password reset; private clipboard payload flags; light/dark forms and constrained layouts rendered. No real input recorded, no physical shortcut injection, no system clipboard or startup changes.");
                 result = 0;
                 Progress("Completed");
             }
@@ -83,8 +112,52 @@ internal static class SmokeTest
                 context.ExitThread();
             }
         });
-        Application.Run(context);
+        try { Application.Run(context); }
+        finally { Application.ThreadException -= reportUiFailure; _trace = null; }
         return result;
+    }
+
+    private static async Task VerifyRecoveryUi(string directory, string password, string outputDirectory)
+    {
+        using (var unavailable = new RecoveryForm(directory, resetPassword: true))
+            Render(unavailable, Path.Combine(outputDirectory, "recovery-unconfigured.png"));
+        string code;
+        using (var generate = new RecoveryForm(directory, resetPassword: false))
+        {
+            PrepareForm(generate);
+            await generate.GenerateForTest(password);
+            code = generate.RecoveryCodeForTest;
+            if (code.Length != 71) throw new Exception("The recovery dialog did not display its generated code.");
+            Render(generate, Path.Combine(outputDirectory, "recovery-code.png"));
+            Ui.SetTheme(AppTheme.Dark);
+            Render(generate, Path.Combine(outputDirectory, "recovery-code-dark.png"));
+            if (VaultStore.HasRecoveryCode(directory)) throw new Exception("A recovery code was activated before confirmation.");
+            await generate.ActivateForTest();
+            if (generate.DialogResult != DialogResult.OK || !VaultStore.HasRecoveryCode(directory)) throw new Exception("Recovery activation did not complete.");
+            if (generate.RecoveryCodeForTest.Length != 0) throw new Exception("Closing recovery kept the displayed code.");
+        }
+        foreach (AppTheme theme in Enum.GetValues<AppTheme>())
+        {
+            Ui.SetTheme(theme);
+            string suffix = theme == AppTheme.Dark ? "-dark" : "";
+            using (var change = new PasswordChangeForm(directory)) Render(change, Path.Combine(outputDirectory, "change-password" + suffix + ".png"));
+            using (var reset = new RecoveryForm(directory, resetPassword: true)) Render(reset, Path.Combine(outputDirectory, "recovery-reset" + suffix + ".png"));
+            if (theme != AppTheme.Dark) continue;
+            using (var setup = new SetupForm()) Render(setup, Path.Combine(outputDirectory, "setup-dark.png"));
+            using (var unlock = new PasswordForm(recoverPassword: _ => { })) Render(unlock, Path.Combine(outputDirectory, "unlock-dark.png"));
+            using (var settings = new SettingsForm(new AppSettings { Theme = theme }, vaultDirectory: directory))
+                Render(settings, Path.Combine(outputDirectory, "settings-dark.png"));
+        }
+        const string replacement = "Synthetic recovered passphrase 43!";
+        using (var reset = new RecoveryForm(directory, resetPassword: true))
+        {
+            PrepareForm(reset);
+            await reset.ResetForTest(code, replacement);
+            if (reset.DialogResult != DialogResult.OK) throw new Exception("Recovery reset dialog did not complete.");
+            VaultStore.VerifyPassword(directory, replacement);
+        }
+        VaultStore.ChangePassword(directory, replacement, password);
+        Ui.SetTheme(AppTheme.Light);
     }
 
     private static string VerifySuccessfulUnlock(string password, string directory)
@@ -170,6 +243,66 @@ internal static class SmokeTest
         }
     }
 
+    private static async Task VerifySettingsNavigation(string password, string directory, IntPtr ownerHandle)
+    {
+        AppTheme originalTheme = Ui.Theme;
+        var session = new HistoryUnlockSession();
+        session.Unlock(password);
+        using var history = new HistoryForm(session, directory);
+        PrepareForm(history);
+        await history.PreparePreviewForTest();
+        int requests = 0;
+        history.SettingsRequested += () =>
+        {
+            requests++;
+            using var settings = new SettingsForm(new AppSettings { Theme = originalTheme }, vaultDirectory: directory)
+            {
+                ShowInTaskbar = false,
+                StartPosition = FormStartPosition.Manual,
+                Location = new Point(-32000, -32000)
+            };
+            Exception? callbackError = null;
+            settings.Shown += (_, _) =>
+            {
+                try
+                {
+                    var theme = Descendants(settings).OfType<ThemeToggle>().Single();
+                    theme.Checked = originalTheme != AppTheme.Dark;
+                    AppTheme preview = originalTheme == AppTheme.Light ? AppTheme.Dark : AppTheme.Light;
+                    if (Ui.Theme != preview || history.BackColor != Ui.Background || history.ForeColor != Ui.Ink)
+                        throw new Exception("Settings theme selection did not preview in the open history window.");
+
+                    // Expiry and successful password changes use this same lock signal.
+                    session.Lock();
+                    if (!history.IsDisposed || !history.IsHistoryClearedForTest)
+                        throw new Exception("Opening settings prevented history from locking and clearing.");
+                    if (settings.IsDisposed || !settings.Visible)
+                        throw new Exception("Closing locked history also closed its settings dialog.");
+                }
+                catch (Exception error) { callbackError = error; }
+                finally { if (!settings.IsDisposed) { settings.DialogResult = DialogResult.Cancel; settings.Close(); } }
+            };
+            settings.ShowDialog(new TrayApplication.SettingsOwner(ownerHandle));
+            if (callbackError is not null) throw callbackError;
+            if (Ui.Theme != originalTheme) throw new Exception("Canceling settings did not restore the original theme.");
+        };
+        try
+        {
+            Descendants(history).OfType<Button>().Single(button => button.Text == "Settings").PerformClick();
+            if (requests != 1) throw new Exception("The in-app Settings button did not open settings once.");
+        }
+        finally { session.Lock(); Ui.SetTheme(originalTheme); }
+    }
+
+    private static IEnumerable<Control> Descendants(Control parent)
+    {
+        foreach (Control child in parent.Controls)
+        {
+            yield return child;
+            foreach (Control descendant in Descendants(child)) yield return descendant;
+        }
+    }
+
     private sealed class UnlockTestClock : TimeProvider
     {
         private DateTimeOffset _utcNow = new(2031, 1, 2, 12, 0, 0, TimeSpan.Zero);
@@ -183,6 +316,7 @@ internal static class SmokeTest
     private static void Render(Form form, string path)
     {
         PrepareForm(form);
+        _trace?.Invoke("Drawing " + Path.GetFileName(path));
         form.PerformLayout();
         using var bitmap = new Bitmap(form.Width, form.Height);
         form.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size));
@@ -241,7 +375,10 @@ internal static class SmokeTest
         form.ShowInTaskbar = false;
         form.StartPosition = FormStartPosition.Manual;
         form.Location = new Point(-32000, -32000);
+        _trace?.Invoke("Showing " + form.GetType().Name);
         form.Show();
+        _trace?.Invoke("Shown " + form.GetType().Name);
         Application.DoEvents();
+        _trace?.Invoke("Ready " + form.GetType().Name);
     }
 }

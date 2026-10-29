@@ -16,6 +16,8 @@
 !/tests/**/*.cs
 !/tests/**/*.csproj
 !/src/TypeBlocks/Assets/TypeBlocks.ico
+!/src/TypeBlocks/Assets/Fonts/Geologica-Light.ttf
+!/src/TypeBlocks/Assets/Fonts/OFL.txt
 
 # Runtime data and local build output must never enter Git, even under src/tests.
 **/bin/

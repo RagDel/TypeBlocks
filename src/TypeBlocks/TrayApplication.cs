@@ -30,13 +30,14 @@ internal sealed class TrayApplication : ApplicationContext
     public TrayApplication(AppSettings settings, bool background)
     {
         _settings = settings;
+        ApplyUnlockDuration();
         _ = _dispatcher.Handle;
         _vault = VaultStore.OpenForRecording(AppSettings.VaultDirectory);
         _recorder = new KeyboardRecorder();
         ApplyExclusions();
         _pause = new ToolStripMenuItem();
         _pause.Click += (_, _) => TogglePause();
-        var menu = new ContextMenuStrip();
+        var menu = new ContextMenuStrip { Font = Ui.Font(10.5f) };
         menu.Items.Add("TypeBlocks", null, (_, _) => OpenHistory());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Open encrypted history…", null, (_, _) => OpenHistory());
@@ -146,6 +147,8 @@ internal sealed class TrayApplication : ApplicationContext
 
     public void ShowWindow() => OpenHistory();
 
+    private void ApplyUnlockDuration() => _unlockSession.SetDuration(TimeSpan.FromMinutes(_settings.AutoLockMinutes));
+
     private void OpenHistory()
     {
         if (_exiting || _sessionLocked) return;
@@ -159,14 +162,28 @@ internal sealed class TrayApplication : ApplicationContext
             if (!_unlockSession.IsUnlocked)
             {
                 int attemptVersion = _unlockAttemptVersion;
-                using var unlock = new PasswordForm();
+                using var unlock = new PasswordForm(recoverPassword: owner =>
+                {
+                    try
+                    {
+                        using var recovery = new RecoveryForm(AppSettings.VaultDirectory, resetPassword: true);
+                        if (recovery.ShowDialog(owner) == DialogResult.OK)
+                        {
+                            _unlockSession.Lock();
+                            MessageBox.Show(owner, "Your password has been reset. Enter the new password to unlock history.", "TypeBlocks");
+                        }
+                    }
+                    catch (Exception error) { Ui.Error(owner, error); }
+                });
                 _activeDialog = unlock;
                 if (unlock.ShowDialog() != DialogResult.OK || _sessionLocked || _exiting || attemptVersion != _unlockAttemptVersion) return;
+                ApplyUnlockDuration();
                 _unlockSession.Unlock(unlock.Password);
                 _activeDialog = null;
             }
             if (!_unlockSession.IsUnlocked) return;
             _history = new HistoryForm(_unlockSession);
+            _history.SettingsRequested += OpenSettings;
             _history.FormClosed += (_, _) => _history = null;
             _history.Show();
         }
@@ -175,18 +192,22 @@ internal sealed class TrayApplication : ApplicationContext
 
     private void OpenSettings()
     {
+        if (_exiting || _sessionLocked) return;
+        if (_activeDialog is { IsDisposed: false }) { Ui.BringForward(_activeDialog); return; }
         if (_dialogOpen) return;
         _dialogOpen = true;
-        _history?.Close();
         try
         {
             using var form = new SettingsForm(_settings, (binding, persist) =>
                 _hotkey.TrySetBinding(binding, persist, out string? error) ? null : error);
             form.PasswordChanged += _unlockSession.Lock;
             _activeDialog = form;
-            if (form.ShowDialog() == DialogResult.OK) { ApplyExclusions(); ApplyPauseState(); }
+            // History stays visible for theme previews, but may close when its unlock expires.
+            // A stable owner keeps that from disposing Settings during a password change.
+            if (form.ShowDialog(new SettingsOwner(_dispatcher.Handle)) == DialogResult.OK) { ApplyUnlockDuration(); ApplyExclusions(); ApplyPauseState(); }
         }
         finally { _activeDialog = null; _dialogOpen = false; }
+        if (!_exiting && !_sessionLocked && _history is { IsDisposed: false }) Ui.BringForward(_history);
     }
 
     private void SessionSwitch(object sender, SessionSwitchEventArgs e)
@@ -201,6 +222,7 @@ internal sealed class TrayApplication : ApplicationContext
                 _unlockAttemptVersion++;
                 _unlockSession.Lock();
                 _history?.Close();
+                CloseAccessDialogs();
                 if (_activeDialog is PasswordForm unlock) unlock.CancelUnlock();
             }
             else if (e.Reason is SessionSwitchReason.SessionUnlock or SessionSwitchReason.SessionLogon or SessionSwitchReason.ConsoleConnect or SessionSwitchReason.RemoteConnect)
@@ -211,6 +233,12 @@ internal sealed class TrayApplication : ApplicationContext
 
     private void OnApplicationExit(object? sender, EventArgs e) => Stop();
 
+    private static void CloseAccessDialogs()
+    {
+        foreach (var form in Application.OpenForms.Cast<Form>().Where(form => form is RecoveryForm or PasswordChangeForm).ToArray())
+            form.Close();
+    }
+
     private void Stop()
     {
         if (_exiting) return;
@@ -219,6 +247,7 @@ internal sealed class TrayApplication : ApplicationContext
         _unlockTimer.Stop();
         _unlockTimer.Dispose();
         _unlockSession.Lock();
+        CloseAccessDialogs();
         if (_activeDialog is PasswordForm unlock) unlock.CancelUnlock();
         SystemEvents.SessionSwitch -= SessionSwitch;
         Application.ApplicationExit -= OnApplicationExit;
@@ -226,6 +255,7 @@ internal sealed class TrayApplication : ApplicationContext
         _recorder.Dispose();
         _hotkey.Dispose();
         _statusPopup.Dispose();
+        PrivateClipboard.ClearIfOwned();
         _history?.Close();
         _tray.Visible = false;
         _queue.CompleteAdding();
@@ -240,4 +270,7 @@ internal sealed class TrayApplication : ApplicationContext
 
     protected override void ExitThreadCore() { Stop(); base.ExitThreadCore(); }
     protected override void Dispose(bool disposing) { if (disposing) Stop(); base.Dispose(disposing); }
+
+    // A Control owner would be replaced by its top-level Form (or the active history window).
+    internal sealed record SettingsOwner(IntPtr Handle) : IWin32Window;
 }

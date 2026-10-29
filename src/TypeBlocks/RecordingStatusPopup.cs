@@ -15,19 +15,28 @@ internal sealed class RecordingStatusPopup : Form
     {
         AutoScaleMode = AutoScaleMode.Dpi;
         AutoScaleDimensions = new SizeF(96, 96);
-        ClientSize = new Size(270, 64);
+        ClientSize = new Size(282, 68);
         FormBorderStyle = FormBorderStyle.None;
         StartPosition = FormStartPosition.Manual;
         ShowInTaskbar = false;
         TopMost = true;
-        BackColor = Color.FromArgb(31, 35, 41);
-        ForeColor = Color.FromArgb(248, 249, 251);
+        Font = Ui.Font(11);
+        RefreshTheme();
+        Ui.ThemeChanged += RefreshTheme;
         DoubleBuffered = true;
         AccessibleRole = AccessibleRole.Alert;
         _dismissTimer.Tick += (_, _) => Dismiss();
     }
 
     protected override bool ShowWithoutActivation => true;
+
+    private void RefreshTheme()
+    {
+        if (IsDisposed) return;
+        BackColor = Ui.Surface;
+        ForeColor = Ui.Ink;
+        Invalidate();
+    }
 
     protected override CreateParams CreateParams
     {
@@ -92,7 +101,7 @@ internal sealed class RecordingStatusPopup : Form
 
     private GraphicsPath RoundedOutline()
     {
-        float diameter = Math.Min(Scale(20), Math.Min(ClientSize.Width - 1, ClientSize.Height - 1));
+        float diameter = Math.Min(Scale(28), Math.Min(ClientSize.Width - 1, ClientSize.Height - 1));
         float right = ClientSize.Width - 1, bottom = ClientSize.Height - 1;
         var path = new GraphicsPath();
         path.AddArc(0, 0, diameter, diameter, 180, 90);
@@ -108,16 +117,15 @@ internal sealed class RecordingStatusPopup : Form
         base.OnPaint(e);
         e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
         using var outline = RoundedOutline();
-        using var border = new Pen(Color.FromArgb(64, 70, 79), Math.Max(1, Scale(1)));
+        using var border = new Pen(Ui.Border, Math.Max(1, Scale(1)));
         e.Graphics.DrawPath(border, outline);
         int diameter = Scale(10);
-        using var dot = new SolidBrush(_recording ? Color.FromArgb(246, 83, 88) : Color.FromArgb(141, 149, 160));
+        using var dot = new SolidBrush(_recording ? Color.FromArgb(208, 67, 57) : Ui.Muted);
         e.Graphics.FillEllipse(dot, Scale(27), (ClientSize.Height - diameter) / 2f, diameter, diameter);
         // Equal left and right insets keep the text centered independently of the dot.
         int inset = Scale(46);
         var textBounds = new Rectangle(inset, Scale(12), ClientSize.Width - inset * 2, ClientSize.Height - Scale(24));
-        using var statusFont = new Font("Segoe UI", Scale(15), FontStyle.Regular, GraphicsUnit.Pixel);
-        TextRenderer.DrawText(e.Graphics, StatusText, statusFont, textBounds, ForeColor,
+        TextRenderer.DrawText(e.Graphics, StatusText, Font, textBounds, ForeColor,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
     }
 
@@ -135,6 +143,7 @@ internal sealed class RecordingStatusPopup : Form
     {
         if (disposing)
         {
+            Ui.ThemeChanged -= RefreshTheme;
             _dismissTimer.Dispose();
         }
         base.Dispose(disposing);

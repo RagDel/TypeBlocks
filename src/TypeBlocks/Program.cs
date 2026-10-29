@@ -8,7 +8,18 @@ internal static class Program
     private static int Main(string[] args)
     {
         ApplicationConfiguration.Initialize();
+        Application.SetDefaultFont(AppFonts.Get(10.5f));
         if (args.Length == 2 && args[0] == "--smoke-test") return SmokeTest.Run(args[1]);
+        if (args.Length > 0 && args[0] == "--ui-preview")
+        {
+#if UI_PREVIEW
+            return InteractivePreview.Run(openHistory: args.Length > 1 && args[1] == "history");
+#else
+            // A development-only flag must never fall through into normal recording startup.
+            MessageBox.Show("UI review is available only in a development build.", "TypeBlocks", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return 1;
+#endif
+        }
         using var showSignal = new EventWaitHandle(false, EventResetMode.AutoReset, InstanceActivation.EventName);
         using var instance = new Mutex(true, @"Local\TypeBlocks.Desktop", out bool firstInstance);
         if (!firstInstance)
@@ -42,6 +53,7 @@ internal static class Program
                 catch (Exception error) { Ui.Error(null, new IOException("History is ready, but startup could not be configured: " + error.Message)); }
             }
             var settings = AppSettings.Load();
+            Ui.SetTheme(settings.Theme);
             using var app = new TrayApplication(settings, background);
             activation.SetHandler(app.ShowWindow);
             Application.Run(app);

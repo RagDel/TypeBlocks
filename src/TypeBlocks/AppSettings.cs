@@ -7,6 +7,8 @@ internal sealed class AppSettings
 {
     public bool Paused { get; set; }
     public RecordingHotkey ToggleHotkey { get; set; } = RecordingHotkey.Default;
+    public AppTheme Theme { get; set; } = AppTheme.Light;
+    public int AutoLockMinutes { get; set; } = 60;
     public string[] ExcludedApplications { get; set; } = ["1password", "bitwarden", "keepass", "keepassxc"];
 
     public static string DataDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TypeBlocks");
@@ -39,6 +41,8 @@ internal sealed class AppSettings
     {
         ExcludedApplications ??= [];
         if (ToggleHotkey is null || !ToggleHotkey.IsValid(out _)) ToggleHotkey = RecordingHotkey.Default;
+        if (!Enum.IsDefined(Theme)) Theme = AppTheme.Light;
+        if (AutoLockMinutes is < 1 or > 1440) AutoLockMinutes = 60;
     }
 
     public void Save()

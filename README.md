@@ -1,52 +1,60 @@
 # TypeBlocks
 
-TypeBlocks records keystrokes and reconstructs readable text history, with password-protected encryption, local storage, and configurable recording controls.
+TypeBlocks records your typing and reconstructs readable text history, with encrypted local storage, password protection, and configurable recording controls.
 
 ## Core features
 
-- **Recover and clean up typed text.** Readable text modes hide key markers and can apply recorded edits such as backspace, cursor movement, selection, and undo/redo. Switch back to the original events at any time.
-- **Find past typing.** Browse by day, search text with **Ctrl+F**, or filter the event table by application, key, or text and sort any column.
-- **Protect stored history.** Each user creates their own password and encrypted vault. Recording can continue while the history viewer is locked.
-- **Toggle recording quickly.** Use the configurable global hotkey (**Ctrl+Alt+Shift+F11** by default) while the app runs in the background, or use tray Pause/Resume. A brief **Typeblocks: On/Off** popup confirms the change without taking focus.
-- **Choose when and where to record.** Exclude entire applications, enable or disable Windows sign-in startup, and keep a paused state across restarts.
-- **Keep storage local.** TypeBlocks has no built-in upload or cloud-sync feature and does not capture screenshots, clipboard contents, or window titles.
+- **Intelligent Text:** applies recorded corrections, cursor movement, selections, and undo/redo to reconstruct the text you wrote.
+- **Three ways to view your typing:** All keys shows the recorded key sequence; Pure Text hides key markers; Intelligent Text also applies edits. For example, typing `3`, Backspace, then `4pm` appears as `34pm` in Pure Text and `4pm` in Intelligent Text.
+- **Find past text:** browse daily history with the newest blocks first, search with **Ctrl+F**, or filter and sort the event table.
+- **Control recording:** use a customizable global hotkey or the tray menu, with clear On/Off popups. Exclude apps and choose whether to start at Windows sign-in.
+- **Protect access:** set your own password, choose when history locks automatically, and optionally prepare a recovery code.
+- **Choose your appearance:** switch between light and dark themes, with Settings available directly from the history window.
 
-## Download and first run
+## Why “Blocks”?
 
-1. Download **TypeBlocks-v0.1.0-win-x64.zip** from the [v0.1.0 preview release](https://github.com/RagDel/TypeBlocks/releases/tag/v0.1.0) and extract it to a permanent folder.
-2. Install the latest **.NET 8 Desktop Runtime for Windows x64** from [Microsoft](https://dotnet.microsoft.com/en-us/download/dotnet/8.0), if needed.
-3. Run **TypeBlocks.exe**. First-run setup requires a new password of at least 12 characters and confirmation **before recording can begin**. There is no password recovery.
-4. Choose whether to start at Windows sign-in; this option is checked by default. Recording normally starts after setup; if the shortcut is unavailable, it starts paused and shows a warning. The app stays visible in the system tray, possibly inside its overflow menu.
-5. Pause recording and wait for **Off** before entering sensitive information. Configure exclusions and your preferred shortcut in **Settings**; double-click the tray icon to open history.
+Your typing is grouped into blocks by application and pauses. A new block starts when recorded typing switches to a different app or follows a gap of **at least five minutes**. The newest blocks appear first, keeping separate writing sessions easy to find.
 
-This is a portable, unsigned Windows x64 preview, with no installer. Keep the executable in the same location after enabling startup. .NET 8 support ends **November 10, 2026**; see [Microsoft's support policy](https://dotnet.microsoft.com/en-us/platform/support/policy/dotnet-core).
+[Watch the 58-second demo](https://github.com/RagDel/TypeBlocks/releases/download/v0.3.2/TypeBlocks-demo-v0.3.2.mp4) · Edited walkthrough using synthetic data.
+
+## Download and setup
+
+1. Download **TypeBlocks-v0.3.2-win-x64.zip** from the [latest preview](https://github.com/RagDel/TypeBlocks/releases/tag/v0.3.2) and extract it to a permanent folder.
+2. Install the latest [.NET 8 Desktop Runtime for Windows x64](https://dotnet.microsoft.com/en-us/download/dotnet/8.0) if needed, then open **TypeBlocks.exe**. This is a portable app with no installer.
+3. Create and confirm a password of at least 12 characters. **Recording cannot begin before setup finishes.** Sign-in startup is selected by default; you can turn it off.
+4. Use **Ctrl+Alt+Shift+F11** to pause or resume, or change the shortcut in Settings. Wait for **Off** before entering sensitive information. If the shortcut is unavailable at startup, recording stays paused and a warning appears.
+5. Double-click the tray icon to open history. Set up a recovery code in **Settings → Recovery code** before you need it, and save it somewhere private.
+
+**Upgrading:** exit TypeBlocks before replacing the executable, keep its location unchanged if startup is enabled, and back up your encrypted History folder first. Enabling recovery upgrades the vault; v0.1.0 cannot open it afterward.
+
+This preview is unsigned. .NET 8 support ends **November 10, 2026** ([Microsoft's policy](https://dotnet.microsoft.com/en-us/platform/support/policy/dotnet-core)).
 
 ## Privacy and limitations
 
-History is encrypted locally under `%LOCALAPPDATA%\TypeBlocks`. Each saved batch uses AES-256-GCM, with its key wrapped using RSA-3072 OAEP-SHA256. The private key is encrypted with AES-256-GCM using a password-derived key from PBKDF2-SHA256, a random salt, and 600,000 iterations. No user's password or vault key is built into the app. Public source and release packages exclude personal recordings, vault files, settings, and private development history.
+- History is encrypted under `%LOCALAPPDATA%\TypeBlocks`. TypeBlocks has no built-in upload or cloud-sync feature. Typing history does not include screenshots, clipboard contents, or window titles.
+- **Sensitive text may still be recorded**, especially in browser password fields. Pause first or exclude the entire sensitive app.
+- **Text modes only change the display.** Original encrypted events remain saved. Intelligent Text is best effort: mouse edits, pasted content, existing document text, and some app-specific behavior cannot be reconstructed reliably. It may start additional blocks for actions it cannot safely replay.
+- History locks after **60 minutes by default**, adjustable in Settings. Closing its window does not immediately lock it; use **Lock & close**. Windows session locking also locks history. Storage encryption cannot protect an unlocked viewer or a compromised computer.
+- Recovery must be activated in advance. Anyone with the recovery code and vault files can regain access. Losing both your password and recovery code makes history unrecoverable.
+- History has no automatic expiry. To remove a day, exit the app and delete its daily `.tmh` file from the History folder. To uninstall, disable sign-in startup, exit, and remove the executable and local data folder.
 
-- **Cleaning the view does not erase recorded events.** Text modes only change the display. Reconstruction is best effort; pasted text, mouse edits, existing document content, autocomplete, and some input methods cannot be reproduced reliably.
-- **Sensitive fields may still be recorded.** Password-field detection is incomplete, especially in browsers. Pause first or exclude the entire sensitive application.
-- **Unlocking lasts up to one hour**, including after closing the viewer. Use **Lock & close** to lock immediately. Windows session lock/disconnect also locks history. Encryption cannot protect an unlocked viewer, malware running as you, or a compromised Windows session.
-- **History has no automatic expiry.** To remove a day, exit TypeBlocks and delete its daily `.tmh` file from the `History` folder. To uninstall, disable sign-in startup, exit, and remove the executable and local data folder. Deleting data is irreversible without a backup.
-
-Never attach real history, vault files, settings, or screenshots of private typing to public issues.
+Public source, downloads, and the demo contain no personal recordings, vault files, passwords, settings, or private development history. Never attach your real history or recovery code to public issues.
 
 ## Build from source
 
-Requires Windows and the .NET 8 SDK. Built with C#, WinForms, Win32, and built-in .NET cryptography; no third-party NuGet packages.
+Requires Windows and the .NET 8 SDK:
 
 ```powershell
 .\test.ps1
 .\build.ps1
 ```
 
-The executable is written to `artifacts/app/TypeBlocks.exe`. Tests use synthetic records and temporary vaults with live recording disabled. They do not establish compatibility with every physical keyboard, layout, or application.
+The executable is written to `artifacts/app/TypeBlocks.exe`. Tests use synthetic records and temporary vaults with live recording disabled. They do not establish compatibility with every keyboard or application. The embedded Geologica font uses the [SIL Open Font License](src/TypeBlocks/Assets/Fonts/OFL.txt); font and .NET launcher notices accompany the Windows download.
 
 ## License and responsible use
 
-Created by [Tilemachos Tragakis](https://github.com/RagDel). Released under the [MIT License](LICENSE), allowing use, modification, and redistribution subject to its terms.
+Created by [Tilemachos Tragakis](https://github.com/RagDel). Available under the [MIT License](LICENSE).
 
-**You are responsible for deciding when recording is active, protecting your password and device, managing retained data, obtaining any required consent, and complying with applicable law.** Use TypeBlocks only for your own typing or with the informed permission of everyone whose input may be recorded. Do not use it for covert monitoring or unauthorized credential collection.
+**You are responsible for when recording is active, protecting your device and access credentials, managing retained data, obtaining required consent, and complying with applicable law.** Use TypeBlocks for your own typing or with the informed permission of everyone whose input may be recorded. Do not use it for covert monitoring or unauthorized credential collection.
 
 The software is provided **as is**, without warranties, including any guarantee of security, confidentiality, accuracy, or fitness for a particular purpose. To the maximum extent permitted by applicable law, the author and contributors disclaim liability for claims, damages, or losses arising from use, misuse, sensitive-data exposure, or security vulnerabilities. The MIT License contains the governing warranty and liability terms; nothing here excludes liability that cannot legally be excluded.

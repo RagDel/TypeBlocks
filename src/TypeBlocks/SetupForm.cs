@@ -4,27 +4,28 @@ namespace TypeBlocks;
 
 internal sealed class SetupForm : Form
 {
-    private readonly TextBox _password = Ui.Password(32, 162, 496);
-    private readonly TextBox _confirm = Ui.Password(32, 234, 496);
-    private readonly CheckBox _startup = new() { Text = "Start recording when I sign into Windows", Checked = true, Location = new(32, 289), Size = new(490, 32) };
+    private readonly ModernTextBox _password = Ui.Password(32, 168, 528);
+    private readonly ModernTextBox _confirm = Ui.Password(32, 264, 528);
+    private readonly ModernCheckBox _startup = new() { Text = "Start recording when I sign into Windows", Checked = true, Location = new(32, 330), Size = new(528, 32) };
     public bool StartAtSignIn => _startup.Checked;
 
     public SetupForm()
     {
-        Ui.Style(this, "Set up TypeBlocks", new(560, 524));
+        Ui.Style(this, "Set up TypeBlocks", new(592, 574));
         FormBorderStyle = FormBorderStyle.FixedDialog;
-        MaximizeBox = false;
+        MaximizeBox = false; MinimizeBox = false;
+        _password.AccessibleName = "New history password";
+        _confirm.AccessibleName = "Repeat history password";
         Controls.AddRange([
-            Ui.Label("TYPEBLOCKS", 32, 24, 496, 24, 10, true),
-            Ui.Label("Your typing, saved.", 32, 59, 496, 46, 23, true),
-            Ui.Label("Choose a password to protect your local history.", 32, 108, 496, 28),
-            Ui.Label("Password · at least 12 characters", 32, 137, 496, 25), _password,
-            Ui.Label("Repeat password", 32, 206, 496, 25), _confirm, _startup,
-            Ui.Label($"Records typing in other apps, including sensitive text.\nPause with {RecordingHotkey.Default} before typing secrets.", 32, 335, 496, 68),
-            Ui.Label("There is no password recovery. Keep your password safe.\nHistory stays on this PC.", 32, 411, 496, 55)
+            Ui.Label("Set up TypeBlocks", 32, 28, 528, 42, 22, true),
+            Ui.Label("Create a password for your encrypted history.", 32, 86, 528, 32),
+            Ui.Label("Password · at least 12 characters", 32, 136, 528, 26, bold: true), _password,
+            Ui.Label("Repeat password", 32, 232, 528, 26, bold: true), _confirm, _startup,
+            Ui.Label($"Records typing in other apps, including sensitive text.\nPause with {RecordingHotkey.Default} before typing secrets.", 32, 384, 528, 52),
+            Ui.Label("History stays on this PC. Keep your password safe.", 32, 448, 528, 28)
         ]);
-        var create = Ui.Button("Create encrypted history", 270, 475, 258, true);
-        var cancel = Ui.Button("Cancel", 32, 475, 116);
+        var create = Ui.Button("Create encrypted history", 276, 500, 284, true, icon: UiIcon.Shield);
+        var cancel = Ui.Button("Cancel", 32, 500, 116);
         cancel.DialogResult = DialogResult.Cancel;
         create.Click += async (_, _) =>
         {
@@ -44,5 +45,7 @@ internal sealed class SetupForm : Form
         };
         Controls.AddRange([create, cancel]);
         AcceptButton = create; CancelButton = cancel;
+        FormClosed += (_, _) => { _password.Clear(); _confirm.Clear(); };
+        Ui.ApplyTheme(this);
     }
 }

@@ -6,9 +6,9 @@ namespace TypeBlocks.Core;
 /// <summary>Replays only the local text implied by recorded events, never the application's document or clipboard.</summary>
 internal static class PureTextReplay
 {
-    public static string Format(IEnumerable<KeystrokeEntry> entries)
+    public static string Format(IEnumerable<KeystrokeEntry> entries, bool newestFirst = false)
     {
-        var output = new StringBuilder();
+        var blocks = new List<string>();
         var buffer = new EditBuffer();
         KeystrokeEntry? previous = null;
         KeystrokeEntry? firstText = null;
@@ -17,14 +17,11 @@ internal static class PureTextReplay
         {
             if (buffer.Length > 0 && firstText is not null)
             {
-                if (output.Length > 0)
-                {
-                    if (output[^1] != '\n') output.AppendLine();
-                    output.AppendLine();
-                }
-                output.Append('[').Append(firstText.Timestamp.ToLocalTime().ToString("HH:mm:ss", CultureInfo.InvariantCulture))
+                var block = new StringBuilder();
+                block.Append('[').Append(firstText.Timestamp.ToLocalTime().ToString("HH:mm:ss", CultureInfo.InvariantCulture))
                     .Append(" · ").Append(firstText.Application).AppendLine("]");
-                output.Append(buffer.Text.Replace("\n", Environment.NewLine, StringComparison.Ordinal));
+                block.Append(buffer.Text.Replace("\n", Environment.NewLine, StringComparison.Ordinal));
+                blocks.Add(block.ToString());
             }
             buffer.Reset();
             firstText = null;
@@ -42,7 +39,7 @@ internal static class PureTextReplay
             if (buffer.Length > 0 && firstText is null) firstText = entry;
         }
         Flush();
-        return output.ToString();
+        return HistoryTextFormatter.JoinBlocks(blocks, newestFirst);
     }
 
     private sealed class EditBuffer

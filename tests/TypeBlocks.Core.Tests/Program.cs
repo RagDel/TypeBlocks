@@ -26,6 +26,8 @@ int passed = 0;
 try
 {
     HistoryUnlockSessionTests.Verify(Run);
+    HistoryTextModeTests.Verify(Run);
+    RecoveryTests.Verify(Run, root);
     Run("text transcript preserves Unicode, whitespace, and repeated input", () =>
     {
         KeystrokeEntry[] entries =

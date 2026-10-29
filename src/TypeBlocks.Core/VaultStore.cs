@@ -85,7 +85,114 @@ public sealed class VaultStore : IDisposable
         byte[] privateKey = rsa.ExportPkcs8PrivateKey();
         try
         {
-            var replacement = EncryptPrivateKey(Convert.FromBase64String(metadata.PublicKey), privateKey, newPassword);
+            var replacement = EncryptPrivateKey(Convert.FromBase64String(metadata.PublicKey), privateKey, newPassword, metadata.Recovery);
+            WriteMetadata(directory, replacement, replace: true);
+        }
+        finally { CryptographicOperations.ZeroMemory(privateKey); }
+    }
+
+    public static bool HasRecoveryCode(string directory) => Exists(directory) && ReadMetadata(directory).Recovery is not null;
+
+    /// <summary>Replaces any existing recovery code. Save the returned code separately from this vault.</summary>
+    public static string CreateRecoveryCode(string directory, string password)
+    {
+        using var pending = PrepareRecoveryCode(directory, password);
+        pending.Activate();
+        return pending.Code;
+    }
+
+    /// <summary>Prepares a new code without changing this vault. Activate only after the owner saves the code.</summary>
+    public static PendingRecoveryCode PrepareRecoveryCode(string directory, string password)
+    {
+        directory = Path.GetFullPath(directory);
+        var metadata = ReadMetadata(directory);
+        using var rsa = UnlockPrivateKey(metadata, password);
+        byte[] privateKey = rsa.ExportPkcs8PrivateKey();
+        byte[] recoveryKey = RandomNumberGenerator.GetBytes(32);
+        try
+        {
+            byte[] publicKey = Convert.FromBase64String(metadata.PublicKey);
+            byte[] nonce = RandomNumberGenerator.GetBytes(NonceSize);
+            byte[] tag = new byte[TagSize];
+            byte[] cipher = new byte[privateKey.Length];
+            using (var aes = new AesGcm(recoveryKey, TagSize))
+                aes.Encrypt(nonce, privateKey, cipher, tag, MakeRecoveryAad(publicKey));
+            var recovery = new RecoveryEnvelope(Convert.ToBase64String(nonce), Convert.ToBase64String(tag), Convert.ToBase64String(cipher));
+            var replacement = EncryptPrivateKey(publicKey, privateKey, password, recovery);
+            string code = FormatRecoveryCode(recoveryKey);
+            return new PendingRecoveryCode(code, () =>
+            {
+                if (ReadMetadata(directory) != metadata)
+                    throw new InvalidOperationException("The vault changed while this recovery code was being prepared. Close this dialog and generate a new code.");
+                WriteMetadata(directory, replacement, replace: true);
+            });
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(recoveryKey);
+            CryptographicOperations.ZeroMemory(privateKey);
+        }
+    }
+
+    /// <summary>A pending recovery replacement. Disposal cancels an unactivated replacement.</summary>
+    public sealed class PendingRecoveryCode : IDisposable
+    {
+        private readonly object _gate = new();
+        private string? _code;
+        private Action? _activate;
+
+        internal PendingRecoveryCode(string code, Action activate)
+        {
+            _code = code;
+            _activate = activate;
+        }
+
+        public string Code
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    if (_code is null) throw new ObjectDisposedException(nameof(PendingRecoveryCode));
+                    return _code;
+                }
+            }
+        }
+
+        /// <summary>Atomically saves the prepared metadata. Repeating a successful activation is a no-op.</summary>
+        public void Activate()
+        {
+            lock (_gate)
+            {
+                ObjectDisposedException.ThrowIf(_code is null, this);
+                _activate?.Invoke();
+                _activate = null;
+            }
+        }
+
+        public void Dispose()
+        {
+            lock (_gate)
+            {
+                // Only the display code and encrypted metadata were retained; private-key buffers were already cleared.
+                _code = null;
+                _activate = null;
+            }
+        }
+    }
+
+    /// <summary>Sets a new password using a previously saved recovery code without changing history keys.</summary>
+    public static void RecoverPassword(string directory, string recoveryCode, string newPassword)
+    {
+        ValidatePassword(newPassword);
+        var metadata = ReadMetadata(directory);
+        if (metadata.Recovery is null)
+            throw new InvalidOperationException("Recovery was not configured for this vault. Its existing password is required.");
+        using var rsa = UnlockRecoveryKey(metadata, recoveryCode);
+        byte[] privateKey = rsa.ExportPkcs8PrivateKey();
+        try
+        {
+            var replacement = EncryptPrivateKey(Convert.FromBase64String(metadata.PublicKey), privateKey, newPassword, metadata.Recovery);
             WriteMetadata(directory, replacement, replace: true);
         }
         finally { CryptographicOperations.ZeroMemory(privateKey); }
@@ -325,8 +432,9 @@ public sealed class VaultStore : IDisposable
             throw new ArgumentException($"Choose a password between {MinimumPasswordLength} and {MaximumPasswordLength} characters.", nameof(password));
     }
 
-    private static Metadata EncryptPrivateKey(byte[] publicKey, byte[] privateKey, string password)
+    private static Metadata EncryptPrivateKey(byte[] publicKey, byte[] privateKey, string password, RecoveryEnvelope? recovery = null)
     {
+        int version = recovery is null ? 1 : 2;
         byte[] salt = RandomNumberGenerator.GetBytes(32);
         byte[] key = Rfc2898DeriveBytes.Pbkdf2(password, salt, Iterations, HashAlgorithmName.SHA256, 32);
         byte[] nonce = RandomNumberGenerator.GetBytes(NonceSize);
@@ -335,9 +443,9 @@ public sealed class VaultStore : IDisposable
         try
         {
             using var aes = new AesGcm(key, TagSize);
-            aes.Encrypt(nonce, privateKey, cipher, tag, MakePrivateKeyAad(1, Iterations, salt, publicKey));
-            return new Metadata(1, Iterations, Convert.ToBase64String(salt), Convert.ToBase64String(publicKey),
-                Convert.ToBase64String(nonce), Convert.ToBase64String(tag), Convert.ToBase64String(cipher));
+            aes.Encrypt(nonce, privateKey, cipher, tag, MakePrivateKeyAad(version, Iterations, salt, publicKey, recovery));
+            return new Metadata(version, Iterations, Convert.ToBase64String(salt), Convert.ToBase64String(publicKey),
+                Convert.ToBase64String(nonce), Convert.ToBase64String(tag), Convert.ToBase64String(cipher), recovery);
         }
         finally { CryptographicOperations.ZeroMemory(key); }
     }
@@ -352,22 +460,15 @@ public sealed class VaultStore : IDisposable
         byte[] key = Rfc2898DeriveBytes.Pbkdf2(password, salt, metadata.Iterations, HashAlgorithmName.SHA256, 32);
         byte[] cipher = Convert.FromBase64String(metadata.EncryptedPrivateKey);
         byte[] privateKey = new byte[cipher.Length];
-        RSA? rsa = null;
         try
         {
             using var aes = new AesGcm(key, TagSize);
             aes.Decrypt(Convert.FromBase64String(metadata.Nonce), cipher, Convert.FromBase64String(metadata.Tag),
-                privateKey, MakePrivateKeyAad(metadata.Version, metadata.Iterations, salt, publicKey));
-            rsa = RSA.Create();
-            rsa.ImportPkcs8PrivateKey(privateKey, out int bytesRead);
-            if (bytesRead != privateKey.Length || rsa.KeySize != KeySize
-                || !CryptographicOperations.FixedTimeEquals(rsa.ExportSubjectPublicKeyInfo(), publicKey))
-                throw new CryptographicException("The private key does not match the vault.");
-            return rsa;
+                privateKey, MakePrivateKeyAad(metadata.Version, metadata.Iterations, salt, publicKey, metadata.Recovery));
+            return ImportMatchingPrivateKey(privateKey, publicKey);
         }
         catch (CryptographicException ex)
         {
-            rsa?.Dispose();
             throw new CryptographicException("The password is incorrect, or the vault metadata has been modified.", ex);
         }
         finally
@@ -377,7 +478,86 @@ public sealed class VaultStore : IDisposable
         }
     }
 
-    private static byte[] MakePrivateKeyAad(int version, int iterations, byte[] salt, byte[] publicKey)
+    private static RSA UnlockRecoveryKey(Metadata metadata, string recoveryCode)
+    {
+        byte[] key = ParseRecoveryCode(recoveryCode);
+        byte[] publicKey = Convert.FromBase64String(metadata.PublicKey);
+        var recovery = metadata.Recovery!;
+        byte[] cipher = Convert.FromBase64String(recovery.EncryptedPrivateKey);
+        byte[] privateKey = new byte[cipher.Length];
+        try
+        {
+            using var aes = new AesGcm(key, TagSize);
+            aes.Decrypt(Convert.FromBase64String(recovery.Nonce), cipher, Convert.FromBase64String(recovery.Tag),
+                privateKey, MakeRecoveryAad(publicKey));
+            return ImportMatchingPrivateKey(privateKey, publicKey);
+        }
+        catch (CryptographicException ex)
+        {
+            throw new CryptographicException("The recovery code is incorrect, or the vault metadata has been modified.", ex);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(key);
+            CryptographicOperations.ZeroMemory(privateKey);
+        }
+    }
+
+    private static RSA ImportMatchingPrivateKey(byte[] privateKey, byte[] publicKey)
+    {
+        var rsa = RSA.Create();
+        try
+        {
+            rsa.ImportPkcs8PrivateKey(privateKey, out int bytesRead);
+            if (bytesRead != privateKey.Length || rsa.KeySize != KeySize
+                || !CryptographicOperations.FixedTimeEquals(rsa.ExportSubjectPublicKeyInfo(), publicKey))
+                throw new CryptographicException("The private key does not match the vault.");
+            return rsa;
+        }
+        catch { rsa.Dispose(); throw; }
+    }
+
+    private static string FormatRecoveryCode(byte[] key) => string.Create(71, key, static (characters, bytes) =>
+    {
+        const string hex = "0123456789ABCDEF";
+        int position = 0;
+        for (int index = 0; index < bytes.Length; index++)
+        {
+            if (index > 0 && index % 4 == 0) characters[position++] = '-';
+            characters[position++] = hex[bytes[index] >> 4];
+            characters[position++] = hex[bytes[index] & 15];
+        }
+    });
+
+    private static byte[] ParseRecoveryCode(string code)
+    {
+        ArgumentNullException.ThrowIfNull(code);
+        if (code.Length > 256) throw new CryptographicException("The recovery code is invalid.");
+        byte[] key = new byte[32];
+        int digits = 0;
+        try
+        {
+            foreach (char character in code)
+            {
+                if (character == '-' || char.IsWhiteSpace(character)) continue;
+                int value = character switch
+                {
+                    >= '0' and <= '9' => character - '0',
+                    >= 'A' and <= 'F' => character - 'A' + 10,
+                    >= 'a' and <= 'f' => character - 'a' + 10,
+                    _ => -1
+                };
+                if (value < 0 || digits >= 64) throw new CryptographicException("The recovery code is invalid.");
+                key[digits / 2] |= (byte)(value << (digits % 2 == 0 ? 4 : 0));
+                digits++;
+            }
+            if (digits != 64) throw new CryptographicException("The recovery code is invalid.");
+            return key;
+        }
+        catch { CryptographicOperations.ZeroMemory(key); throw; }
+    }
+
+    private static byte[] MakePrivateKeyAad(int version, int iterations, byte[] salt, byte[] publicKey, RecoveryEnvelope? recovery)
     {
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
@@ -387,6 +567,26 @@ public sealed class VaultStore : IDisposable
         writer.Write(iterations);
         writer.Write(salt.Length);
         writer.Write(salt);
+        writer.Write(publicKey.Length);
+        writer.Write(publicKey);
+        if (version == 2)
+        {
+            // Bind the recovery envelope to password authentication as well as its own AES-GCM tag.
+            writer.Write(Convert.FromBase64String(recovery!.Nonce));
+            writer.Write(Convert.FromBase64String(recovery.Tag));
+            byte[] cipher = Convert.FromBase64String(recovery.EncryptedPrivateKey);
+            writer.Write(cipher.Length);
+            writer.Write(cipher);
+        }
+        return stream.ToArray();
+    }
+
+    private static byte[] MakeRecoveryAad(byte[] publicKey)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
+        writer.Write("TypeBlocks recovery private key");
+        writer.Write(2);
         writer.Write(publicKey.Length);
         writer.Write(publicKey);
         return stream.ToArray();
@@ -415,22 +615,37 @@ public sealed class VaultStore : IDisposable
             using var document = JsonDocument.Parse(stream, new JsonDocumentOptions { MaxDepth = 16 });
             if (document.RootElement.ValueKind != JsonValueKind.Object)
                 throw new InvalidDataException("The vault metadata is invalid.");
-            var properties = document.RootElement.EnumerateObject().Select(p => p.Name).ToArray();
-            if (properties.Distinct(StringComparer.Ordinal).Count() != properties.Length)
-                throw new InvalidDataException("The vault metadata contains duplicate fields.");
+            RejectDuplicateFields(document.RootElement);
             var metadata = document.Deserialize<Metadata>(JsonOptions)
                 ?? throw new InvalidDataException("The vault metadata is missing.");
-            if (metadata.Version != 1 || metadata.Iterations is < Iterations or > 2_000_000
+            if (metadata.Version is not (1 or 2) || metadata.Iterations is < Iterations or > 2_000_000
                 || DecodeLength(metadata.Salt) != 32 || DecodeLength(metadata.Nonce) != NonceSize
                 || DecodeLength(metadata.Tag) != TagSize || DecodeLength(metadata.EncryptedPrivateKey) is < 128 or > 8192
                 || DecodeLength(metadata.PublicKey) is < 128 or > 1024)
                 throw new InvalidDataException("The vault metadata has unsupported or invalid fields.");
+            if ((metadata.Version == 1 && metadata.Recovery is not null)
+                || (metadata.Version == 2 && (metadata.Recovery is null
+                    || DecodeLength(metadata.Recovery.Nonce) != NonceSize
+                    || DecodeLength(metadata.Recovery.Tag) != TagSize
+                    || DecodeLength(metadata.Recovery.EncryptedPrivateKey) != DecodeLength(metadata.EncryptedPrivateKey))))
+                throw new InvalidDataException("The recovery metadata has unsupported or invalid fields.");
             using var rsa = ImportPublicKey(Convert.FromBase64String(metadata.PublicKey));
             return metadata;
         }
         catch (Exception ex) when (ex is JsonException or FormatException or ArgumentException or CryptographicException)
         {
             throw new InvalidDataException("The vault metadata is damaged or invalid.", ex);
+        }
+    }
+
+    private static void RejectDuplicateFields(JsonElement element)
+    {
+        if (element.ValueKind != JsonValueKind.Object) return;
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var property in element.EnumerateObject())
+        {
+            if (!names.Add(property.Name)) throw new InvalidDataException("The vault metadata contains duplicate fields.");
+            RejectDuplicateFields(property.Value);
         }
     }
 
@@ -461,5 +676,7 @@ public sealed class VaultStore : IDisposable
         Path.Combine(Path.GetFullPath(directory), date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + ".tmh");
     private sealed record ScanState(long EndPosition, long NextSequence, byte[] LastHash);
     private sealed record Metadata(int Version, int Iterations, string Salt, string PublicKey,
-        string Nonce, string Tag, string EncryptedPrivateKey);
+        string Nonce, string Tag, string EncryptedPrivateKey,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] RecoveryEnvelope? Recovery = null);
+    private sealed record RecoveryEnvelope(string Nonce, string Tag, string EncryptedPrivateKey);
 }

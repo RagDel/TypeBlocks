@@ -9,6 +9,7 @@ internal static class HistoryUnlockSessionTests
         run("unlock session starts locked and holds credentials only after unlock", () =>
         {
             var session = new HistoryUnlockSession(new TestClock());
+            Assert(session.LockDuration == TimeSpan.FromHours(1));
             Assert(!session.IsUnlocked && session.Version == 0 && session.ExpiresAtUtc is null);
             Assert(session.Remaining == TimeSpan.Zero && !session.TryGetPassword(out var missing) && missing is null);
             session.Unlock(Password);
@@ -131,6 +132,104 @@ internal static class HistoryUnlockSessionTests
             bool rejected = false;
             try { session.Unlock(""); } catch (ArgumentException) { rejected = true; }
             Assert(rejected && session.Version == 1 && session.TryGetPassword(out var current) && current == Password);
+        });
+        run("custom unlock duration expires exactly at its fixed deadline", () =>
+        {
+            var clock = new TestClock();
+            var session = new HistoryUnlockSession(clock);
+            session.SetDuration(TimeSpan.FromMinutes(15));
+            session.Unlock(Password);
+            var deadline = clock.GetUtcNow() + TimeSpan.FromMinutes(15);
+            Assert(session.LockDuration == TimeSpan.FromMinutes(15) && session.ExpiresAtUtc == deadline);
+            clock.Advance(TimeSpan.FromMinutes(15) - TimeSpan.FromTicks(1));
+            Assert(session.IsUnlocked && session.Remaining == TimeSpan.FromTicks(1));
+            clock.Advance(TimeSpan.FromTicks(1));
+            Assert(!session.IsUnlocked && session.ExpiresAtUtc is null);
+        });
+        run("unlock duration accepts its bounds and rejects invalid changes without losing access", () =>
+        {
+            var session = new HistoryUnlockSession(new TestClock());
+            session.SetDuration(TimeSpan.FromMinutes(1));
+            session.Unlock(Password);
+            Assert(session.Remaining == TimeSpan.FromMinutes(1));
+            session.SetDuration(TimeSpan.FromDays(1));
+            var deadline = session.ExpiresAtUtc;
+            long version = session.Version;
+            foreach (var invalid in new[] { TimeSpan.Zero, TimeSpan.FromMinutes(-1), TimeSpan.FromMinutes(1) - TimeSpan.FromTicks(1), TimeSpan.FromDays(1) + TimeSpan.FromTicks(1), TimeSpan.MaxValue })
+            {
+                bool rejected = false;
+                try { session.SetDuration(invalid); } catch (ArgumentOutOfRangeException) { rejected = true; }
+                Assert(rejected && session.LockDuration == TimeSpan.FromDays(1) && session.ExpiresAtUtc == deadline && session.Version == version);
+                Assert(session.TryGetPassword(out var current) && current == Password);
+            }
+        });
+        run("shortening unlock duration preserves elapsed time and can lock immediately", () =>
+        {
+            var clock = new TestClock();
+            var session = new HistoryUnlockSession(clock);
+            int locked = 0;
+            session.Locked += () => locked++;
+            session.Unlock(Password);
+            var authenticatedAt = clock.GetUtcNow();
+            clock.Advance(TimeSpan.FromMinutes(10));
+            session.SetDuration(TimeSpan.FromMinutes(20));
+            Assert(session.Remaining == TimeSpan.FromMinutes(10) && session.ExpiresAtUtc == authenticatedAt + TimeSpan.FromMinutes(20));
+            clock.Advance(TimeSpan.FromMinutes(2));
+            session.SetDuration(TimeSpan.FromMinutes(20));
+            Assert(session.Remaining == TimeSpan.FromMinutes(8));
+            session.SetDuration(TimeSpan.FromMinutes(5));
+            Assert(!session.IsUnlocked && !session.TryGetPassword(out _) && session.Remaining == TimeSpan.Zero && locked == 1);
+        });
+        run("lengthening unlock duration remains anchored to the original authentication", () =>
+        {
+            var clock = new TestClock();
+            var session = new HistoryUnlockSession(clock);
+            session.Unlock(Password);
+            var authenticatedAt = clock.GetUtcNow();
+            clock.Advance(TimeSpan.FromMinutes(30));
+            long version = session.Version;
+            session.SetDuration(TimeSpan.FromMinutes(120));
+            Assert(session.Remaining == TimeSpan.FromMinutes(90) && session.ExpiresAtUtc == authenticatedAt + TimeSpan.FromMinutes(120));
+            Assert(session.Version == version);
+            clock.Advance(TimeSpan.FromMinutes(90));
+            Assert(!session.IsUnlocked);
+        });
+        run("changing duration cannot revive an expired unlock and applies to the next unlock", () =>
+        {
+            var clock = new TestClock();
+            var session = new HistoryUnlockSession(clock);
+            session.Unlock(Password);
+            clock.Advance(TimeSpan.FromMinutes(61));
+            session.SetDuration(TimeSpan.FromMinutes(120));
+            Assert(!session.IsUnlocked && session.Version == 2 && session.ExpiresAtUtc is null);
+            session.Unlock(Password);
+            Assert(session.Remaining == TimeSpan.FromMinutes(120) && session.Version == 3);
+        });
+        run("custom duration changes preserve monotonic protection against clock rollback", () =>
+        {
+            var clock = new TestClock();
+            var session = new HistoryUnlockSession(clock);
+            session.SetDuration(TimeSpan.FromMinutes(30));
+            session.Unlock(Password);
+            clock.Advance(TimeSpan.FromMinutes(15));
+            clock.ShiftUtc(TimeSpan.FromDays(-1));
+            session.SetDuration(TimeSpan.FromMinutes(60));
+            Assert(session.Remaining == TimeSpan.FromMinutes(45));
+            clock.Advance(TimeSpan.FromMinutes(45));
+            Assert(!session.IsUnlocked);
+        });
+        run("custom duration changes retain wall time already spent suspended", () =>
+        {
+            var clock = new TestClock();
+            var session = new HistoryUnlockSession(clock);
+            session.SetDuration(TimeSpan.FromMinutes(30));
+            session.Unlock(Password);
+            clock.Advance(TimeSpan.FromMinutes(5));
+            clock.ShiftUtc(TimeSpan.FromMinutes(20));
+            session.SetDuration(TimeSpan.FromMinutes(60));
+            Assert(session.Remaining == TimeSpan.FromMinutes(35));
+            clock.ShiftUtc(TimeSpan.FromMinutes(35));
+            Assert(!session.IsUnlocked);
         });
     }
 

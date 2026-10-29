@@ -7,12 +7,20 @@
     <Nullable>enable</Nullable>
     <AssemblyName>TypeBlocks</AssemblyName>
     <RootNamespace>TypeBlocks</RootNamespace>
-    <Version>0.1.0</Version>
+    <Version>0.3.2</Version>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <ApplicationIcon>Assets/TypeBlocks.ico</ApplicationIcon>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(EnableUiPreview)' == 'true'">
+    <DefineConstants>$(DefineConstants);UI_PREVIEW</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(EnableUiPreview)' != 'true'">
+    <Compile Remove="InteractivePreview.cs" />
+  </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../TypeBlocks.Core/TypeBlocks.Core.csproj" />
     <EmbeddedResource Include="Assets/TypeBlocks.ico" LogicalName="TypeBlocks.Assets.TypeBlocks.ico" />
+    <EmbeddedResource Include="Assets/Fonts/Geologica-Light.ttf" LogicalName="TypeBlocks.Assets.Geologica-Light.ttf" />
+    <EmbeddedResource Include="Assets/Fonts/OFL.txt" LogicalName="TypeBlocks.Assets.Geologica-OFL.txt" />
   </ItemGroup>
 </Project>

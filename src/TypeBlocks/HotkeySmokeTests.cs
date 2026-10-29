@@ -11,9 +11,20 @@ internal static class HotkeySmokeTests
     public static async Task Verify(string outputDirectory)
     {
         VerifySettings();
+        VerifyPrivateClipboardPayload();
         VerifyResumeBoundary();
         VerifyRegistration();
         await VerifyPopup(outputDirectory);
+    }
+
+    private static void VerifyPrivateClipboardPayload()
+    {
+        var data = PrivateClipboard.BuildDataObject("SYNTHETIC-RECOVERY-CODE");
+        foreach (string format in new[] { "CanIncludeInClipboardHistory", "CanUploadToCloudClipboard" })
+        {
+            if (data.GetData(format, autoConvert: false) is not MemoryStream stream || !stream.ToArray().SequenceEqual(new byte[4]))
+                throw new Exception("Recovery clipboard data permits history or cloud upload.");
+        }
     }
 
     private static void VerifyResumeBoundary()
@@ -59,10 +70,16 @@ internal static class HotkeySmokeTests
         }
 
         var custom = new RecordingHotkey { Key = Keys.D7, Control = true, Alt = false, Shift = true };
-        var source = new AppSettings { Paused = true, ToggleHotkey = custom };
+        foreach (string json in new[] { "{}", "{\"AutoLockMinutes\":0}", "{\"AutoLockMinutes\":-1}", "{\"AutoLockMinutes\":1441}" })
+        {
+            var settings = JsonSerializer.Deserialize<AppSettings>(json)!;
+            settings.Normalize();
+            Assert(settings.AutoLockMinutes == 60, "Missing or invalid lock durations must default to one hour.");
+        }
+        var source = new AppSettings { Paused = true, ToggleHotkey = custom, Theme = AppTheme.Dark, AutoLockMinutes = 15 };
         var restored = JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(source))!;
         restored.Normalize();
-        Assert(restored.Paused && restored.ToggleHotkey == custom && custom.ToString() == "Ctrl+Shift+7",
+        Assert(restored.Paused && restored.Theme == AppTheme.Dark && restored.AutoLockMinutes == 15 && restored.ToggleHotkey == custom && custom.ToString() == "Ctrl+Shift+7",
             "Custom shortcut or pause state failed the settings round trip.");
     }
 
