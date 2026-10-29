@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>TypeBlocks</AssemblyName>
+    <RootNamespace>TypeBlocks</RootNamespace>
+    <Version>0.1.0</Version>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <ApplicationIcon>Assets/TypeBlocks.ico</ApplicationIcon>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../TypeBlocks.Core/TypeBlocks.Core.csproj" />
+    <EmbeddedResource Include="Assets/TypeBlocks.ico" LogicalName="TypeBlocks.Assets.TypeBlocks.ico" />
+  </ItemGroup>
+</Project>

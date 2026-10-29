@@ -1,8 +1,35 @@
-# This repository publishes only the explicitly listed showcase files.
+# Only reviewed public source, tests, scripts, and documentation may be tracked.
 /*
 !/.gitignore
 !/README.md
-!/assets/
-/assets/*
-!/assets/text-view.png
-!/assets/event-table.png
+!/LICENSE
+!/build.ps1
+!/test.ps1
+!/src/
+!/tests/
+/src/**
+/tests/**
+!/src/**/
+!/tests/**/
+!/src/**/*.cs
+!/src/**/*.csproj
+!/tests/**/*.cs
+!/tests/**/*.csproj
+!/src/TypeBlocks/Assets/TypeBlocks.ico
+
+# Runtime data and local build output must never enter Git, even under src/tests.
+**/bin/
+**/obj/
+**/artifacts/
+**/.tools/
+**/History/
+*.tmh
+*.tmh.*
+vault.json*
+settings.json*
+*.pdb
+*.exe
+*.dll
+*.zip
+*.user
+*.suo
